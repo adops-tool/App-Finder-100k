@@ -6,15 +6,17 @@ on:
 
 permissions: read-all
 
-concurrency:
-  group: codeql-${{ github.ref }}-${{ matrix.language }}
-  cancel-in-progress: false
-
 jobs:
   codeql:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The `matrix` context is only available inside a job. Declaring this
+    # concurrency group at workflow level makes GitHub reject the whole file
+    # ("Unrecognized named-value: 'matrix'"), so no job is ever created.
+    concurrency:
+      group: codeql-${{ github.ref }}-${{ matrix.language }}
+      cancel-in-progress: false
     permissions:
       actions: read
       contents: read
