@@ -16,13 +16,16 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Pinned to full commit SHAs. No explicit `ref:` is set so the workflow
+      # checks out the merge commit GitHub provides — `github.head_ref` does not
+      # resolve for pull requests coming from a fork.
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.head_ref }}
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20'
 
