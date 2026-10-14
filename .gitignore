@@ -1,0 +1,36 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Application state ---
+# SQLite database plus its WAL side-car files are local runtime state and must
+# never be committed: they contain scraped data and differ per machine.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Tooling caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

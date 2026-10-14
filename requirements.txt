@@ -1,3 +1,9 @@
-streamlit
-google-play-scraper
-pandas
+# Lower bounds are pinned so a fresh install is reproducible and Dependabot has
+# concrete versions to bump. Upper bounds guard against unannounced breaking
+# majors.
+#
+# streamlit >= 1.49 provides the `width="stretch"` dataframe API used in ui.py
+# (the older `use_container_width` flag is deprecated and scheduled for removal).
+streamlit>=1.49,<2
+google-play-scraper>=1.2.4,<2
+pandas>=2.0,<4
