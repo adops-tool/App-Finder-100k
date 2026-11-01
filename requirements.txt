@@ -6,4 +6,4 @@
 # (the older `use_container_width` flag is deprecated and scheduled for removal).
 streamlit>=1.49,<2
 google-play-scraper>=1.2.4,<2
-pandas>=2.0,<4
+pandas>=3.1.0,<4
