@@ -79,8 +79,9 @@ def sort_apps(apps: list[dict], reverse: bool = True) -> list[dict]:
         >>> sort_apps(rows)[0][COL_NOVELTY] > 0
         True
     """
+    annotated = []
     for row in apps:
-        row[COL_NOVELTY] = novelty_score(
+        score = novelty_score(
             row.get(KEY_GENRE) or "Unknown",
             row.get(KEY_INSTALLS_INT) or 0,
             # Use the raw float when available; the display column is rounded to
@@ -88,7 +89,8 @@ def sort_apps(apps: list[dict], reverse: bool = True) -> list[dict]:
             row.get(KEY_SCORE, row.get(COL_RATING, 0.0)),
             row.get(COL_REVIEWS) or 0,
         )
-    return sorted(apps, key=lambda row: row[COL_NOVELTY], reverse=reverse)
+        annotated.append({**row, COL_NOVELTY: score})
+    return sorted(annotated, key=lambda row: row[COL_NOVELTY], reverse=reverse)
 
 
 def _as_int(value) -> int:
@@ -108,7 +110,7 @@ def _as_int(value) -> int:
     """
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -128,6 +130,7 @@ def _as_float(value) -> float:
         0.0
     """
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
         return 0.0
+    return number if math.isfinite(number) else 0.0

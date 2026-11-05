@@ -4,16 +4,21 @@ Every magic number that more than one module needs lives here so behaviour can
 be tuned from a single place instead of being duplicated across the pipeline.
 """
 
+import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
 # Resolve paths relative to this file so the database location never depends on
-# the working directory Streamlit happened to be launched from.
+# the working directory Streamlit happened to be launched from. Deployments can
+# point to a persistent volume without modifying application code.
 BASE_DIR = Path(__file__).resolve().parent
 
-DB_PATH = str(BASE_DIR / "seen_apps.db")
+DB_PATH = os.environ.get(
+    "APP_FINDER_DB_PATH",
+    str(BASE_DIR / "seen_apps.db"),
+)
 
 # Seconds SQLite waits for a locked database before raising. Detail rows are
 # cached from a thread pool, so writers must tolerate each other.
@@ -37,51 +42,148 @@ SEARCH_LOCALES: tuple[tuple[str, str], ...] = (
 MAX_LOCALES_PER_RUN = 4
 
 GAME_KEYWORDS: tuple[str, ...] = (
-    "action", "adventure", "arcade", "puzzle", "racing",
-    "role playing", "simulation", "sports", "strategy", "trivia",
-    "word", "horror", "survival", "shooter", "tower defense",
-    "roguelike", "dungeon", "visual novel", "platformer", "escape room",
-    "chess", "mahjong", "card game", "board game", "fighting",
-    "idle game", "clicker", "match 3", "runner", "driving",
-    "open world", "crafting", "building", "farming", "city builder",
-    "quiz", "crossword", "sudoku", "solitaire", "slots",
-    "music game", "rhythm", "dance", "karaoke",
+    "action",
+    "adventure",
+    "arcade",
+    "puzzle",
+    "racing",
+    "role playing",
+    "simulation",
+    "sports",
+    "strategy",
+    "trivia",
+    "word",
+    "horror",
+    "survival",
+    "shooter",
+    "tower defense",
+    "roguelike",
+    "dungeon",
+    "visual novel",
+    "platformer",
+    "escape room",
+    "chess",
+    "mahjong",
+    "card game",
+    "board game",
+    "fighting",
+    "idle game",
+    "clicker",
+    "match 3",
+    "runner",
+    "driving",
+    "open world",
+    "crafting",
+    "building",
+    "farming",
+    "city builder",
+    "quiz",
+    "crossword",
+    "sudoku",
+    "solitaire",
+    "slots",
+    "music game",
+    "rhythm",
+    "dance",
+    "karaoke",
 )
 
 NICHE_KEYWORDS: tuple[str, ...] = (
-    "turn based tactics", "soulslike", "deckbuilder", "tactical rpg",
-    "incremental game", "metroidvania", "immersive sim",
-    "survival horror indie", "point and click adventure", "narrative puzzle",
-    "asymmetric multiplayer", "hidden gems", "minimalist puzzle",
-    "retro pixel rpg", "party game local", "walking simulator",
-    "interactive fiction", "text adventure", "rogue lite",
-    "auto battler", "autochess", "moba", "battle royale",
-    "extraction shooter", "base building", "colony sim",
-    "4x strategy", "grand strategy", "wargame", "hex tactics",
+    "turn based tactics",
+    "soulslike",
+    "deckbuilder",
+    "tactical rpg",
+    "incremental game",
+    "metroidvania",
+    "immersive sim",
+    "survival horror indie",
+    "point and click adventure",
+    "narrative puzzle",
+    "asymmetric multiplayer",
+    "hidden gems",
+    "minimalist puzzle",
+    "retro pixel rpg",
+    "party game local",
+    "walking simulator",
+    "interactive fiction",
+    "text adventure",
+    "rogue lite",
+    "auto battler",
+    "autochess",
+    "moba",
+    "battle royale",
+    "extraction shooter",
+    "base building",
+    "colony sim",
+    "4x strategy",
+    "grand strategy",
+    "wargame",
+    "hex tactics",
 )
 
 UTILITY_KEYWORDS: tuple[str, ...] = (
-    "productivity", "notes", "todo list", "habit tracker",
-    "meditation", "sleep sounds", "focus timer", "pomodoro",
-    "language learning", "flashcards", "drawing", "pixel art editor",
-    "music maker", "beat maker", "dj app", "guitar tuner",
-    "astronomy", "star map", "weather", "fitness tracker",
-    "workout", "yoga", "running tracker", "cycling",
-    "recipe", "cooking", "nutrition", "calorie counter",
-    "finance tracker", "budget", "expense tracker",
-    "photo editor", "video editor", "collage maker",
-    "barcode scanner", "qr code", "file manager", "calculator",
+    "productivity",
+    "notes",
+    "todo list",
+    "habit tracker",
+    "meditation",
+    "sleep sounds",
+    "focus timer",
+    "pomodoro",
+    "language learning",
+    "flashcards",
+    "drawing",
+    "pixel art editor",
+    "music maker",
+    "beat maker",
+    "dj app",
+    "guitar tuner",
+    "astronomy",
+    "star map",
+    "weather",
+    "fitness tracker",
+    "workout",
+    "yoga",
+    "running tracker",
+    "cycling",
+    "recipe",
+    "cooking",
+    "nutrition",
+    "calorie counter",
+    "finance tracker",
+    "budget",
+    "expense tracker",
+    "photo editor",
+    "video editor",
+    "collage maker",
+    "barcode scanner",
+    "qr code",
+    "file manager",
+    "calculator",
 )
 
 # Duplicates are intentional: they weight the sampling towards less saturated
 # niches. The tuple keeps the pool immutable at runtime.
 ALL_KEYWORDS: tuple[str, ...] = NICHE_KEYWORDS * 3 + GAME_KEYWORDS * 2 + UTILITY_KEYWORDS
 
-NICHE_GENRES: frozenset[str] = frozenset({
-    "Word", "Trivia", "Music", "Board", "Card", "Educational",
-    "Adventure", "Simulation", "Strategy", "Role Playing",
-    "Puzzle", "Racing", "Sports", "Casual",
-})
+NICHE_GENRES: frozenset[str] = frozenset(
+    {
+        "Word",
+        "Trivia",
+        "Music",
+        "Board",
+        "Card",
+        "Educational",
+        "Adventure",
+        "Simulation",
+        "Strategy",
+        "Role Playing",
+        "Puzzle",
+        "Racing",
+        "Sports",
+        "Casual",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Default run parameters
@@ -136,8 +238,17 @@ KEY_GENRE = "_genre"
 # Column order for the on-screen grid. Columns absent from a run (for example
 # the novelty score when sorting is disabled) are skipped by the renderer.
 DISPLAY_COLUMNS: tuple[str, ...] = (
-    COL_TITLE, COL_INSTALLS, COL_RATING, COL_GENRE, COL_REVIEWS,
-    COL_ADS, COL_IAP, COL_UPDATED, COL_NOVELTY, COL_LINK,
+    COL_ICON,
+    COL_TITLE,
+    COL_INSTALLS,
+    COL_RATING,
+    COL_GENRE,
+    COL_REVIEWS,
+    COL_ADS,
+    COL_IAP,
+    COL_UPDATED,
+    COL_NOVELTY,
+    COL_LINK,
 )
 
 # ---------------------------------------------------------------------------

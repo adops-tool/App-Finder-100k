@@ -213,7 +213,7 @@ def get_cached_details_many(app_ids: Iterable[str]) -> dict[str, dict]:
 
     cached: dict[str, dict] = {}
     for start in range(0, len(unique_ids), _SQL_CHUNK_SIZE):
-        chunk: Sequence[str] = unique_ids[start:start + _SQL_CHUNK_SIZE]
+        chunk: Sequence[str] = unique_ids[start : start + _SQL_CHUNK_SIZE]
         # Only the placeholder count is interpolated — every value is bound as a
         # parameter, so no caller-supplied string ever reaches the SQL text.
         placeholders = ",".join("?" * len(chunk))
@@ -231,49 +231,67 @@ def get_cached_details_many(app_ids: Iterable[str]) -> dict[str, dict]:
 
         for app_id, payload in rows:
             try:
-                cached[app_id] = json.loads(payload)
+                data = json.loads(payload)
             except (TypeError, json.JSONDecodeError):
                 # A corrupt row must not take down the run; treat it as a miss.
                 logger.warning("Discarding unreadable cache entry for %s", app_id)
+                continue
+            if isinstance(data, dict):
+                cached[app_id] = data
+            else:
+                logger.warning("Discarding invalid cache payload for %s", app_id)
 
     return cached
 
 
 def set_cached_details(app_id: str, data: dict) -> None:
-    """Store Google Play metadata for an application in the cache table.
+    """Store one application's metadata in the cache table.
 
     Args:
         app_id (str): The Google Play application ID used as the cache key.
         data (dict): The application details returned by the scraper library.
 
     Returns:
-        None: This function writes the cached payload to the database.
-
-    Raises:
-        Nothing is raised on purpose. Serialization or storage problems are
-        logged and swallowed so a failed cache write cannot discard details the
-        caller already paid a network request for.
-
-    Examples:
-        >>> set_cached_details("com.example.app", {"title": "Example"})
+        None: Serialization and storage failures are logged and suppressed.
     """
-    if not app_id or not data:
-        return
+    set_cached_details_many({app_id: data})
 
-    try:
-        payload = json.dumps(data, ensure_ascii=False)
-    except (TypeError, ValueError) as exc:
-        logger.warning("Cannot serialize details for %s: %s", app_id, exc)
+
+def set_cached_details_many(details_by_id: dict[str, dict]) -> None:
+    """Store a batch of application details in one SQLite transaction.
+
+    Network workers only retrieve data; their caller uses this function to
+    persist all responses together. This avoids opening one database connection
+    per application while retaining best-effort cache semantics.
+
+    Args:
+        details_by_id (dict[str, dict]): Raw metadata keyed by application ID.
+
+    Returns:
+        None: Invalid entries and storage failures are logged and suppressed.
+    """
+    rows: list[tuple[str, str]] = []
+    for app_id, data in details_by_id.items():
+        if not app_id or not isinstance(data, dict) or not data:
+            continue
+        try:
+            payload = json.dumps(data, ensure_ascii=False)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Cannot serialize details for %s: %s", app_id, exc)
+            continue
+        rows.append((app_id, payload))
+
+    if not rows:
         return
 
     try:
         with _conn() as con:
-            con.execute(
+            con.executemany(
                 "INSERT OR REPLACE INTO app_details_cache (app_id, data) VALUES (?, ?)",
-                (app_id, payload),
+                rows,
             )
     except sqlite3.Error as exc:
-        logger.warning("Cannot cache details for %s: %s", app_id, exc)
+        logger.warning("Cannot cache application details: %s", exc)
 
 
 def seen_apps_count() -> int:

@@ -48,14 +48,14 @@ Attributes:
         when the triggering event is a push.
 """
 
-import os
 import json
+import os
 import re
 import time
 import urllib.parse
 
 import requests
-from github import Github, Auth
+from github import Auth, Github
 
 # ---------------------------------------------------------------------------
 # Environment — read once at module level so all functions share the values.
@@ -64,7 +64,9 @@ gh_token = os.environ.get("GITHUB_TOKEN")
 model_token = os.environ.get("GH_MODELS_TOKEN")
 repo_name = os.environ.get("REPOSITORY")
 event_name = os.environ.get("EVENT_NAME")
-allowed_users = [u.strip().lower() for u in os.environ.get("ALLOWED_USER", "").split(",") if u.strip()]
+allowed_users = [
+    u.strip().lower() for u in os.environ.get("ALLOWED_USER", "").split(",") if u.strip()
+]
 
 MODEL_NAME = "Llama-3.3-70B-Instruct"
 ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
@@ -78,6 +80,9 @@ ISSUE_SCAN_LIMIT = 300
 # fail the whole create-issue request.
 MAX_LABEL_LENGTH = 50
 MAX_LABELS = 20
+MAX_ISSUE_TITLE_LENGTH = 200
+MAX_ISSUE_BODY_LENGTH = 60_000
+MAX_SUMMARY_LENGTH = 10_000
 
 # Diff budgets per event type (characters).
 PUSH_DIFF_BUDGET = 10_000
@@ -160,14 +165,14 @@ if event_name == "push":
         print(f"Action performed by {actor_login}, not in allowed list. Skipping.")
         raise SystemExit(0)
 
-    pr_match = re.search(r'\(#(\d+)\)', commit.commit.message or "")
+    pr_match = re.search(r"\(#(\d+)\)", commit.commit.message or "")
     if pr_match:
         dedup_key = f"PR #{pr_match.group(1)}"
     else:
         dedup_key = f"commit:{commit_sha[:7]}"
 
     event_context = f"Commit Message: {commit.commit.message}"
-    trigger_labels = [m.lower() for m in re.findall(r'\[(.*?)\]', commit.commit.message or "")]
+    trigger_labels = [m.lower() for m in re.findall(r"\[(.*?)\]", commit.commit.message or "")]
 
     diff_budget = PUSH_DIFF_BUDGET
     for file in commit.files:
@@ -232,7 +237,9 @@ def was_already_closed(title_keyword: str) -> bool:
     keyword = (title_keyword or "").strip().lower()
     if not keyword:
         return False
-    for issue in repo.get_issues(state="closed", sort="created", direction="desc")[:ISSUE_SCAN_LIMIT]:
+    for issue in repo.get_issues(state="closed", sort="created", direction="desc")[
+        :ISSUE_SCAN_LIMIT
+    ]:
         if keyword in (issue.title or "").lower():
             print(f"Similar closed issue found: #{issue.number} — skipping.")
             return True
@@ -280,65 +287,177 @@ def detect_change_type(files: list, diff: str, context: str) -> str:
     files_lower = [f.lower() for f in files]
     diff_lower = diff.lower()
 
-    has_security_keywords = any(kw in diff_lower for kw in [
-        "secret", "token", "password", "api_key", "apikey", "auth",
-        "credential", "private_key", "access_key", "bearer",
-        "vulnerability", "cve-", "injection", "xss", "csrf",
-    ])
-    has_security_files = any(f for f in files_lower if any(kw in f for kw in [
-        "security", "auth", ".env", "secret",
-    ]))
+    has_security_keywords = any(
+        kw in diff_lower
+        for kw in [
+            "secret",
+            "token",
+            "password",
+            "api_key",
+            "apikey",
+            "auth",
+            "credential",
+            "private_key",
+            "access_key",
+            "bearer",
+            "vulnerability",
+            "cve-",
+            "injection",
+            "xss",
+            "csrf",
+        ]
+    )
+    has_security_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                "security",
+                "auth",
+                ".env",
+                "secret",
+            ]
+        )
+    )
     if has_security_keywords or has_security_files:
         return "security"
 
-    has_dep_files = any(f for f in files_lower if any(kw in f for kw in [
-        "requirements", "package.json", "package-lock", "pipfile",
-        "poetry.lock", "cargo.toml", "go.sum", "gemfile",
-        "dependabot", "renovate",
-    ]))
+    has_dep_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                "requirements",
+                "package.json",
+                "package-lock",
+                "pipfile",
+                "poetry.lock",
+                "cargo.toml",
+                "go.sum",
+                "gemfile",
+                "dependabot",
+                "renovate",
+            ]
+        )
+    )
     if has_dep_files:
         return "deps"
 
-    has_ci_files = any(f for f in files_lower if any(kw in f for kw in [
-        ".github/workflows/", "jenkinsfile", ".gitlab-ci",
-        ".circleci", "dockerfile", "docker-compose",
-        ".github/actions/",
-    ]))
+    has_ci_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                ".github/workflows/",
+                "jenkinsfile",
+                ".gitlab-ci",
+                ".circleci",
+                "dockerfile",
+                "docker-compose",
+                ".github/actions/",
+            ]
+        )
+    )
     if has_ci_files:
         return "ci"
 
     has_doc_files = all(
-        any(kw in f for kw in [
-            "readme", "contributing", "changelog", "license",
-            "docs/", "doc/", ".md", ".rst", ".txt",
-        ])
+        any(
+            kw in f
+            for kw in [
+                "readme",
+                "contributing",
+                "changelog",
+                "license",
+                "docs/",
+                "doc/",
+                ".md",
+                ".rst",
+                ".txt",
+            ]
+        )
         for f in files_lower
     )
     if has_doc_files and files_lower:
         return "docs"
 
-    has_frontend_files = any(f for f in files_lower if any(kw in f for kw in [
-        ".html", ".css", ".jsx", ".tsx", ".vue", ".svelte",
-        "frontend/", "public/", "static/", "assets/",
-    ]))
-    has_frontend_keywords = any(kw in diff_lower for kw in [
-        "classname", "style=", "onclick", "addeventlistener",
-        "document.get", "innerhtml", "appendchild",
-    ])
+    has_frontend_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                ".html",
+                ".css",
+                ".jsx",
+                ".tsx",
+                ".vue",
+                ".svelte",
+                "frontend/",
+                "public/",
+                "static/",
+                "assets/",
+            ]
+        )
+    )
+    has_frontend_keywords = any(
+        kw in diff_lower
+        for kw in [
+            "classname",
+            "style=",
+            "onclick",
+            "addeventlistener",
+            "document.get",
+            "innerhtml",
+            "appendchild",
+        ]
+    )
     if has_frontend_files or has_frontend_keywords:
         return "frontend"
 
-    has_backend_files = any(f for f in files_lower if any(kw in f for kw in [
-        ".py", ".go", ".java", ".rb", ".rs", ".php",
-        "api/", "server/", "backend/", "lib/", "src/",
-    ]))
+    has_backend_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                ".py",
+                ".go",
+                ".java",
+                ".rb",
+                ".rs",
+                ".php",
+                "api/",
+                "server/",
+                "backend/",
+                "lib/",
+                "src/",
+            ]
+        )
+    )
     if has_backend_files:
         return "backend"
 
-    has_config_files = any(f for f in files_lower if any(kw in f for kw in [
-        ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf",
-        ".json", ".env",
-    ]))
+    has_config_files = any(
+        f
+        for f in files_lower
+        if any(
+            kw in f
+            for kw in [
+                ".yml",
+                ".yaml",
+                ".toml",
+                ".ini",
+                ".cfg",
+                ".conf",
+                ".json",
+                ".env",
+            ]
+        )
+    )
     if has_config_files:
         return "config"
 
@@ -481,18 +600,43 @@ PROMPT_ROLES = {
 
 # Maps commit-message bracket labels and PR labels to role keys.
 LABEL_TO_ROLE = {
-    "sec": "security", "security": "security", "audit": "security",
-    "review": "review", "refactor": "review", "code-review": "review",
-    "qa": "qa", "test": "qa", "testing": "qa",
-    "perf": "perf", "performance": "perf", "optimize": "perf",
-    "pm": "pm", "release": "pm", "product": "pm",
-    "deps": "deps", "dependencies": "deps", "dep": "deps",
-    "arch": "arch", "architecture": "arch",
-    "ci": "ci", "devops": "ci", "pipeline": "ci", "workflow": "ci",
-    "docs": "docs", "doc": "docs", "documentation": "docs",
-    "frontend": "frontend", "ui": "frontend", "ux": "frontend", "css": "frontend",
-    "backend": "backend", "api": "backend", "server": "backend",
-    "config": "config", "infra": "config", "infrastructure": "config",
+    "sec": "security",
+    "security": "security",
+    "audit": "security",
+    "review": "review",
+    "refactor": "review",
+    "code-review": "review",
+    "qa": "qa",
+    "test": "qa",
+    "testing": "qa",
+    "perf": "perf",
+    "performance": "perf",
+    "optimize": "perf",
+    "pm": "pm",
+    "release": "pm",
+    "product": "pm",
+    "deps": "deps",
+    "dependencies": "deps",
+    "dep": "deps",
+    "arch": "arch",
+    "architecture": "arch",
+    "ci": "ci",
+    "devops": "ci",
+    "pipeline": "ci",
+    "workflow": "ci",
+    "docs": "docs",
+    "doc": "docs",
+    "documentation": "docs",
+    "frontend": "frontend",
+    "ui": "frontend",
+    "ux": "frontend",
+    "css": "frontend",
+    "backend": "backend",
+    "api": "backend",
+    "server": "backend",
+    "config": "config",
+    "infra": "config",
+    "infrastructure": "config",
 }
 
 # ---------------------------------------------------------------------------
@@ -526,12 +670,12 @@ Changes: {diff_text}
 {base_instructions}"""
 
 SEVERITY_LABEL_MAP = {
-    "critical":      "severity: critical",
-    "high":          "severity: high",
-    "elevated":      "severity: elevated",
-    "medium":        "severity: medium",
-    "moderate":      "severity: moderate",
-    "low":           "severity: low",
+    "critical": "severity: critical",
+    "high": "severity: high",
+    "elevated": "severity: elevated",
+    "medium": "severity: medium",
+    "moderate": "severity: moderate",
+    "low": "severity: low",
     "informational": "severity: informational",
 }
 
@@ -586,6 +730,13 @@ def _as_positive_int(value, default: int = 1) -> int:
     return number if number > 0 else default
 
 
+def _model_text(value, max_length: int) -> str:
+    """Return bounded plain text from an untrusted model response field."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:max_length]
+
+
 def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
     """Send a review prompt to the hosted model and parse the JSON reply.
 
@@ -607,7 +758,10 @@ def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
     }
     payload = {
         "messages": [
-            {"role": "system", "content": "You are a professional software auditor. Always return valid JSON only. No markdown, no explanation, just the JSON object."},
+            {
+                "role": "system",
+                "content": "You are a professional software auditor. Always return valid JSON only. No markdown, no explanation, just the JSON object.",
+            },
             {"role": "user", "content": prompt},
         ],
         "model": MODEL_NAME,
@@ -619,12 +773,14 @@ def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
         for attempt in range(retries):
             status = None
             try:
-                resp = session.post(ENDPOINT, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+                resp = session.post(
+                    ENDPOINT, headers=headers, json=payload, timeout=REQUEST_TIMEOUT
+                )
                 status = resp.status_code
                 resp.raise_for_status()
                 data = resp.json()
                 raw = data["choices"][0]["message"]["content"].strip()
-                raw = re.sub(r'^```json\s*|```$', '', raw, flags=re.MULTILINE).strip()
+                raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
                 parsed = json.loads(raw)
                 if not isinstance(parsed, dict):
                     raise ValueError(f"expected a JSON object, got {type(parsed).__name__}")
@@ -634,7 +790,7 @@ def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
                 # instead of spending the remaining attempts and their delays.
                 if status is not None and 400 <= status < 500 and status != 429:
                     print(f"Model request rejected with HTTP {status}. Not retrying.")
-                    raise SystemExit(0)
+                    raise SystemExit(0) from None
                 print(f"Attempt {attempt + 1} failed with HTTP {status}.")
             except Exception as exc:
                 # Log the exception type only: the message can embed response
@@ -642,7 +798,7 @@ def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
                 print(f"Attempt {attempt + 1} failed: {type(exc).__name__}")
 
             if attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
+                time.sleep(delay * (2**attempt))
     finally:
         session.close()
 
@@ -656,8 +812,8 @@ def call_model(prompt: str, retries: int = 3, delay: int = 5) -> dict:
 
 result = call_model(prompt)
 
-issue_title = str(result.get("issue_title") or "").strip()
-issue_body = str(result.get("issue_body") or "").strip()
+issue_title = _model_text(result.get("issue_title"), MAX_ISSUE_TITLE_LENGTH)
+issue_body = _model_text(result.get("issue_body"), MAX_ISSUE_BODY_LENGTH)
 if not issue_title or not issue_body:
     print("Model response is missing issue_title or issue_body. Skipping.")
     raise SystemExit(0)
@@ -665,7 +821,8 @@ if not issue_title or not issue_body:
 if was_already_closed(issue_title[:40]):
     raise SystemExit(0)
 
-affected_file = str(result.get("affected_file") or "").strip()
+reported_file = _model_text(result.get("affected_file"), 1_000)
+affected_file = reported_file if reported_file in changed_files else ""
 affected_line = _as_positive_int(result.get("affected_line"))
 
 if affected_file:
@@ -681,15 +838,11 @@ severity = str(result.get("severity") or "medium").strip().lower()
 extra_labels = [SEVERITY_LABEL_MAP.get(severity, "severity: medium")]
 all_labels = _sanitize_labels(result.get("labels"), extra_labels)
 
-issue = repo.create_issue(
-    title=issue_title,
-    body=issue_body + footer,
-    labels=all_labels
-)
+issue = repo.create_issue(title=issue_title, body=issue_body + footer, labels=all_labels)
 print(f"Created issue #{issue.number}: {issue.title}")
 
 if pr_ref:
-    summary = str(result.get("summary") or "").strip()
+    summary = _model_text(result.get("summary"), MAX_SUMMARY_LENGTH)
     if summary:
         pr_comment = (
             "### AI Analysis Summary\n\n"
@@ -699,4 +852,3 @@ if pr_ref:
         )
         pr_ref.create_issue_comment(pr_comment)
         print(f"Posted summary comment to PR #{pr_ref.number}")
-

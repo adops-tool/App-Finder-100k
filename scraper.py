@@ -13,11 +13,12 @@ must never abort a run that already paid for dozens of others.
 """
 
 import logging
+import math
 import random
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import streamlit as st
 from google_play_scraper import app as get_app_details
@@ -32,8 +33,8 @@ from config import (
     COL_ICON,
     COL_INSTALLS,
     COL_LINK,
-    COL_REVIEWS,
     COL_RATING,
+    COL_REVIEWS,
     COL_TITLE,
     COL_UPDATED,
     DEFAULT_SEARCH_WORKERS,
@@ -45,7 +46,7 @@ from config import (
     MAX_LOCALES_PER_RUN,
     SEARCH_LOCALES,
 )
-from db import get_cached_details_many, set_cached_details
+from db import get_cached_details_many, set_cached_details_many
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,6 @@ def _make_context_initializer():
     return _attach_context
 
 
-
 @st.cache_data(show_spinner=False, ttl=CACHE_TTL_SEARCH)
 def _fetch_search(query: str, lang: str, country: str, limit: int) -> list:
     """Fetch Google Play search results for a localized query.
@@ -149,8 +149,8 @@ def _fetch_search(query: str, lang: str, country: str, limit: int) -> list:
 def _fetch_details(app_id: str) -> dict | None:
     """Fetch detailed metadata for a Google Play application.
 
-    Cache reads happen in the caller as a single batched query, so this helper
-    only performs the network lookup and best-effort cache write.
+    Cache reads and writes happen in the caller as batched transactions, so
+    this helper only performs the network lookup.
 
     Args:
         app_id (str): The Google Play application ID to retrieve.
@@ -170,16 +170,14 @@ def _fetch_details(app_id: str) -> dict | None:
         logger.debug("Details lookup failed for %s: %s", app_id, exc)
         return None
 
-    if data:
-        # Never raises: a failed cache write must not throw away the payload.
-        set_cached_details(app_id, data)
-    return data
+    return data if isinstance(data, dict) else None
 
 
 def collect_candidates(
     queries_per_run: int,
     search_limit: int,
     seen_apps: set[str],
+    custom_queries: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Collect unique unseen application IDs from randomized search queries.
 
@@ -190,6 +188,8 @@ def collect_candidates(
             locale combination.
         seen_apps (set[str]): Application IDs that should be excluded from the
             candidate list.
+        custom_queries (list[str] | None): Optional user-provided phrases that
+            take priority over random keyword sampling.
 
     Returns:
         tuple[list[str], list[str]]: A pair of the de-duplicated unseen
@@ -201,9 +201,21 @@ def collect_candidates(
         >>> (candidates, queries) == ([], [])
         True
     """
-    selected_queries = random.sample(
-        ALL_KEYWORDS, k=min(max(queries_per_run, 0), len(ALL_KEYWORDS))
+    query_count = min(max(queries_per_run, 0), len(ALL_KEYWORDS))
+    prioritized = list(
+        dict.fromkeys(query.strip() for query in (custom_queries or []) if query.strip())
     )
+    selected_queries = prioritized[:query_count]
+    if len(selected_queries) < query_count:
+        used_queries = {query.casefold() for query in selected_queries}
+        remaining = [query for query in ALL_KEYWORDS if query.casefold() not in used_queries]
+        selected_queries.extend(
+            random.sample(
+                remaining,
+                k=min(query_count - len(selected_queries), len(remaining)),
+            )
+        )
+
     selected_locales = random.sample(
         SEARCH_LOCALES, k=min(MAX_LOCALES_PER_RUN, len(SEARCH_LOCALES))
     )
@@ -212,9 +224,7 @@ def collect_candidates(
         return [], selected_queries
 
     combinations = [
-        (query, lang, country)
-        for query in selected_queries
-        for lang, country in selected_locales
+        (query, lang, country) for query in selected_queries for lang, country in selected_locales
     ]
 
     candidate_ids: list[str] = []
@@ -277,6 +287,7 @@ def fetch_details_batch(
     missing = [app_id for app_id in sampled if app_id not in details_by_id]
 
     if missing:
+        fetched_details: dict[str, dict] = {}
         workers = min(DEFAULT_WORKERS, max(4, results_limit // 2 + 2), len(missing))
         with _thread_pool(workers) as executor:
             futures = {executor.submit(_fetch_details, app_id): app_id for app_id in missing}
@@ -289,6 +300,11 @@ def fetch_details_batch(
                     continue
                 if details:
                     details_by_id[app_id] = details
+                    fetched_details[app_id] = details
+
+        # A single transaction is substantially cheaper than one connection per
+        # network response and still cannot invalidate an otherwise valid run.
+        set_cached_details_many(fetched_details)
 
     found: list[dict] = []
     # Iterate the sample rather than completion order so identical inputs give
@@ -327,20 +343,21 @@ def _normalize_row(app_id: str, details: dict, installs_count: int) -> dict:
         >>> row[COL_LINK].endswith("id=com.example.app")
         True
     """
-    score = details.get("score") or 0.0
-    genre = details.get("genre") or "Unknown"
+    score = _finite_float(details.get("score"))
+    genre = _display_text(details.get("genre"), "Unknown")
+    ratings_count = _non_negative_int(details.get("ratings"))
 
     return {
         "appId": app_id,
-        COL_TITLE: details.get("title") or app_id,
-        COL_INSTALLS: details.get("installs") or "0",
+        COL_TITLE: _display_text(details.get("title"), app_id),
+        COL_INSTALLS: f"{installs_count:,}".replace(",", " "),
         COL_RATING: f"{score:.1f}",
         COL_GENRE: genre,
-        COL_REVIEWS: details.get("ratings") or 0,
-        COL_UPDATED: details.get("lastUpdatedOn") or "—",
-        COL_ADS: "Да" if details.get("containsAds") else "Нет",
-        COL_IAP: "Да" if details.get("offersIAP") else "Нет",
-        COL_ICON: details.get("icon") or "",
+        COL_REVIEWS: ratings_count,
+        COL_UPDATED: _display_text(details.get("lastUpdatedOn"), "—"),
+        COL_ADS: "Да" if details.get("containsAds") is True else "Нет",
+        COL_IAP: "Да" if details.get("offersIAP") is True else "Нет",
+        COL_ICON: _safe_image_url(details.get("icon")),
         # The package id is untrusted input: quote it so it cannot smuggle
         # extra query parameters into the generated link.
         COL_LINK: _PLAY_STORE_URL.format(app_id=quote(app_id, safe="")),
@@ -348,6 +365,39 @@ def _normalize_row(app_id: str, details: dict, installs_count: int) -> dict:
         KEY_SCORE: score,
         KEY_GENRE: genre,
     }
+
+
+def _finite_float(value) -> float:
+    """Return a finite, non-negative float for untrusted store metadata."""
+    try:
+        number = float(value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return number if math.isfinite(number) and number >= 0 else 0.0
+
+
+def _non_negative_int(value) -> int:
+    """Return a bounded integer representation of an optional numeric field."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _display_text(value, fallback: str) -> str:
+    """Convert optional text to a trimmed value with a predictable fallback."""
+    if not isinstance(value, str):
+        return fallback
+    return value.strip() or fallback
+
+
+def _safe_image_url(value) -> str:
+    """Allow only absolute HTTP(S) image URLs in the result grid."""
+    if not isinstance(value, str):
+        return ""
+    url = value.strip()
+    parsed = urlsplit(url)
+    return url if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
 
 def _resolve_installs(details: dict) -> int:
