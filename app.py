@@ -5,8 +5,8 @@ import logging
 import streamlit as st
 
 from db import init_db, load_seen_apps, save_seen_apps
-from scraper import collect_candidates, fetch_details_batch
 from scoring import sort_apps
+from scraper import collect_candidates, fetch_details_batch
 from ui import render_results, render_sidebar
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def _run_discovery(params: dict) -> tuple[list[dict], list[str]]:
         queries_per_run=params["queries_per_run"],
         search_limit=params["search_limit"],
         seen_apps=seen,
+        custom_queries=params["custom_queries"],
     )
 
     found = fetch_details_batch(
@@ -71,23 +72,57 @@ def _run_discovery(params: dict) -> tuple[list[dict], list[str]]:
     return found, selected_queries
 
 
-st.set_page_config(page_title="GP Random Finder", page_icon=None)
-_bootstrap()
+st.set_page_config(
+    page_title="GP Random Finder",
+    page_icon="🎯",
+    layout="wide",
+)
+
+# Static presentation rules only; no external data is interpolated into HTML.
+st.markdown(
+    """
+    <style>
+        .block-container {max-width: 1500px; padding-top: 2rem; padding-bottom: 3rem;}
+        [data-testid="stMetric"] {
+            background: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.18);
+            border-radius: 0.75rem;
+            padding: 0.9rem 1rem;
+        }
+        [data-testid="stDownloadButton"] button {min-height: 2.75rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+try:
+    _bootstrap()
+except Exception:
+    logger.exception("Application storage initialization failed")
+    st.error(
+        "Локальное хранилище недоступно. Проверьте права на запись и перезапустите приложение."
+    )
+    st.stop()
 
 st.title("Google Play Random Finder")
+st.caption(
+    "Находите перспективные приложения в заданном диапазоне популярности — без повторов между запусками."
+)
 
 params = render_sidebar()
 
-if st.button("Найти", type="primary"):
+if st.button("Найти приложения", type="primary"):
     if not params["installs_range_valid"]:
         st.error("Максимум скачиваний не может быть меньше минимума — исправьте диапазон.")
     else:
-        with st.spinner("Анализ Google Play..."):
+        with st.spinner("Ищем приложения и проверяем метаданные Google Play..."):
             try:
                 found, selected_queries = _run_discovery(params)
-            except Exception as exc:
+            except Exception:
                 logger.exception("Discovery run failed")
-                st.error(f"Не удалось выполнить поиск: {exc}")
+                st.error(
+                    "Не удалось выполнить поиск. Повторите попытку или уменьшите глубину поиска."
+                )
             else:
                 st.session_state[_RESULTS_KEY] = found
                 st.session_state[_QUERIES_KEY] = selected_queries
